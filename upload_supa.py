@@ -106,7 +106,9 @@ def upload_csv_to_supabase(csv_path: str) -> None:
     logging.info(f"Upload complete. Success: {inserted}/{total_records}")
 
 def normalize_column_name(name: str) -> str:
-    """Sanitize column names to match database schema"""
-    return name.strip().lower().replace(' ', '_')
+    """Convert column name to lowercase and sanitize"""
+    name = name.strip().lower().replace(' ', '_')
+    name = ''.join([c if c.isalnum() or c == '_' else '_' for c in name])
+    return name[:63] if name else 'unknown_column'
 
 

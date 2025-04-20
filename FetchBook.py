@@ -62,6 +62,7 @@ def process_files(file_paths: List[str]) -> tuple[List[Dict], Set[str], Set[str]
     all_rows = []
     ean_set = set()
     all_input_columns = set()
+    total_rows_processed = 0
 
     with tqdm(file_paths, desc="Processing files", unit="file") as pbar:
         for file_path in pbar:
@@ -80,6 +81,10 @@ def process_files(file_paths: List[str]) -> tuple[List[Dict], Set[str], Set[str]
 
                     row_count = 0
                     for row in tqdm(reader, desc=f"Processing {os.path.basename(file_path)}", leave=False):
+                        
+                        if total_rows_processed >= 10:
+                            break
+                        
                         if len(row) <= stock_idx or row[stock_idx].strip() in ('', '0'):
                             continue
                         
@@ -87,6 +92,7 @@ def process_files(file_paths: List[str]) -> tuple[List[Dict], Set[str], Set[str]
                         all_rows.append(row_dict)
                         ean_set.add(row_dict['ean'])
                         row_count += 1
+                        total_rows_processed += 1
                     
                     pbar.set_postfix(rows=row_count, file=os.path.basename(file_path))
             except Exception as e:
@@ -184,6 +190,7 @@ def main():
     """Main processing pipeline with CSV output only"""
     try:
         files = download_ftp_files()
+        
         if not files:
             raise ValueError("No input files specified")
 

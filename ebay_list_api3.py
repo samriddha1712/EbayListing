@@ -11,6 +11,7 @@ import os
 
 
 # Configuration
+table_name = os.getenv('SUPABASE_TABLE_NAME')
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 EBAY_CREDENTIALS = {
@@ -238,7 +239,7 @@ def main():
     )
     success_count = 0
     # Process inventory
-    inventory = supabase.table('inventory').select('*').execute().data
+    inventory = supabase.table(table_name).select('*').execute().data
     for item in inventory:
         
         try:

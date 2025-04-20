@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 # Configuration
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
-TABLE_NAME = 'unmatched'
+TABLE_NAME = os.getenv('SUPABASE_TABLE_NAME')
 BATCH_SIZE = 100
 
 def get_existing_columns(supabase: Client) -> List[str]:
@@ -110,4 +110,3 @@ def normalize_column_name(name: str) -> str:
     return name.strip().lower().replace(' ', '_')
 
 
-upload_csv_to_supabase('output/unmatched_20250413_115124.csv')

@@ -125,27 +125,27 @@ def generate_book_title(book_name, author, binding_type=None, publication_year=N
     variations = []
     
     # Variation 1: Full format with binding/year
-    variations.append(f"{book_name} by {author} {binding_type or ''} {publication_year or ''}".strip())
+    variations.append(f"{book_name} by {author} {binding_type or ''} Book {publication_year or ''}".strip())
     
     # Variation 2: Abbreviated binding
-    variations.append(f"{book_name} by {author} {binding_abbr or ''} {publication_year or ''}".strip())
+    variations.append(f"{book_name} by {author} {binding_abbr or ''} Book {publication_year or ''}".strip())
     
     # Variation 3: Remove "by"
-    variations.append(f"{book_name} {author} {binding_abbr or ''} {publication_year or ''}".strip())
+    variations.append(f"{book_name} {author} {binding_abbr or ''} Book {publication_year or ''}".strip())
     
     # Variation 4: Truncate author
-    base_length = len(f"{book_name} ") + len(f" {binding_abbr or ''} {publication_year or ''}".strip()) + 1
+    base_length = len(f"{book_name} ") + len(f" {binding_abbr or ''} Book {publication_year or ''}".strip()) + 1
     max_author_len = 80 - base_length - 1  # -1 for ellipsis
     if max_author_len >= 1:
         truncated_author = truncate(author, max_author_len)
-        variations.append(f"{book_name} {truncated_author} {binding_abbr or ''} {publication_year or ''}".strip())
+        variations.append(f"{book_name} {truncated_author} {binding_abbr or ''} Book {publication_year or ''}".strip())
     
     # Variation 5: Truncate book name
-    base_length = len(f" {author} {binding_abbr or ''} {publication_year or ''}".strip()) + 1
+    base_length = len(f" {author} {binding_abbr or ''} Book {publication_year or ''}".strip()) + 1
     max_book_len = 80 - base_length - 1  # -1 for ellipsis
     if max_book_len >= 1:
         truncated_book = truncate(book_name, max_book_len)
-        variations.append(f"{truncated_book} {author} {binding_abbr or ''} {publication_year or ''}".strip())
+        variations.append(f"{truncated_book} {author} {binding_abbr or ''} Book {publication_year or ''}".strip())
     
     # Find first valid variation
     for title in variations:
@@ -265,11 +265,11 @@ def main():
                     "Description": item.get('description', 'No description available'),
                     "PrimaryCategory": {"CategoryID": "29290"},  
                     "ConditionID": str(item.get('condition_id', 3000)),  
-                    "Currency": "GBP",
+                    "Currency": "USD",
                     "StartPrice": '45',
                     "Quantity": str(item['stock']),
                     "Country": "US",
-                    "Location": item.get('location', 'San Francisco, CA'),
+                    "Location": item.get('location', 'UK'),
                     "ListingDuration": "GTC",
                     "BusinessPolicies": {
                         

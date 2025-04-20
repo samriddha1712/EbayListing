@@ -235,7 +235,7 @@ def main():
         appid=EBAY_CREDENTIALS['client_id'],
         devid=EBAY_CREDENTIALS['dev_id'],
         token=access_token,
-        site_id="0"
+        site_id="3"
     )
     success_count = 0
     # Process inventory

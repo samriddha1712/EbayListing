@@ -46,16 +46,16 @@ BINDING_SHORTCODES = {
     'DVD': 'DVD',
     'DVD Audio': 'DVA',
     'DVD-ROM': 'DVR',
-    'Flexibound': 'FLX',
+    'Flexibound': 'FB',
     'Game': 'GAM',
-    'Hardcover': 'HCV',
+    'Hardcover': 'HC',
     'Hardcover-spiral': 'HCS',
     'Imitation Leather': 'IML',
     'JP Oversized': 'JPO',
     'Kindle Edition': 'KIN',
     'Kindle Edition with Audio/Video': 'KAV',
     'Kitchen': 'KIT',
-    'Leather Bound': 'LTH',
+    'Leather Bound': 'LB',
     'Library Binding': 'LIB',
     'Loose Leaf': 'LSL',
     'Map': 'MAP',
@@ -67,7 +67,7 @@ BINDING_SHORTCODES = {
     'Novelty Book': 'NOV',
     'Office Product': 'OFP',
     'Pamphlet': 'PAM',
-    'Paperback': 'PBK',
+    'Paperback': 'PB',
     'Paperback Bunko': 'PBU',
     'Perfect Paperback': 'PPB',
     'Pocket Book': 'PKB',
@@ -135,25 +135,25 @@ def generate_book_title(book_name, author, binding_type=None, publication_year=N
     
     # Variation 4: Truncate author
     base_length = len(f"{book_name} ") + len(f" {binding_abbr or ''} Book {publication_year or ''}".strip()) + 1
-    max_author_len = 80 - base_length - 1  # -1 for ellipsis
+    max_author_len = 65 - base_length - 1  # -1 for ellipsis
     if max_author_len >= 1:
         truncated_author = truncate(author, max_author_len)
         variations.append(f"{book_name} {truncated_author} {binding_abbr or ''} Book {publication_year or ''}".strip())
     
     # Variation 5: Truncate book name
     base_length = len(f" {author} {binding_abbr or ''} Book {publication_year or ''}".strip()) + 1
-    max_book_len = 80 - base_length - 1  # -1 for ellipsis
+    max_book_len = 65 - base_length - 1  # -1 for ellipsis
     if max_book_len >= 1:
         truncated_book = truncate(book_name, max_book_len)
         variations.append(f"{truncated_book} {author} {binding_abbr or ''} Book {publication_year or ''}".strip())
     
     # Find first valid variation
     for title in variations:
-        if len(title) <= 80:
-            return title[:80]  # Ensure exact length
+        if len(title) <= 65:
+            return title[:65]  # Ensure exact length
     
     # Final fallback: Book title only with ellipsis
-    return truncate(book_name, 77).ljust(80, ellipsis)[:80]
+    return truncate(book_name, 62).ljust(65, ellipsis)[:65]
 
 def extract_year(date_str):
     """Extract year from various date formats"""
@@ -229,13 +229,14 @@ def main():
 
     # Initialize eBay API connection
     connection = Connection(
+        debug=False,
         domain='api.ebay.com',
         config_file=None,
         certid=EBAY_CREDENTIALS['client_secret'],
         appid=EBAY_CREDENTIALS['client_id'],
         devid=EBAY_CREDENTIALS['dev_id'],
         token=access_token,
-        site_id="3"
+        siteid=3
     )
     success_count = 0
     # Process inventory
@@ -264,12 +265,13 @@ def main():
                     "Title": title,
                     "Description": item.get('description', 'No description available'),
                     "PrimaryCategory": {"CategoryID": "29290"},  
-                    "ConditionID": str(item.get('condition_id', 3000)),  
-                    "Currency": "USD",
+                    "ConditionID": "1000",  
+                    "Currency": "GBP",
+                    "ListingType": "FixedPriceItem",
                     "StartPrice": '45',
                     "Quantity": str(item['stock']),
-                    "Country": "US",
-                    "Location": item.get('location', 'UK'),
+                    "Country": "GB",
+                    "Location": "London",
                     "ListingDuration": "GTC",
                     "BusinessPolicies": {
                         
@@ -285,16 +287,16 @@ def main():
                     "ShippingDetails": {
                     "ShippingServiceOptions": {
                         "ShippingServicePriority": "1",
-                        "ShippingService": "USPSMedia",
-                        "ShippingServiceCost": "2.50",
+                        "ShippingService": "UK_RoyalMailSecondClassStandard",
+                        "ShippingServiceCost": "3.00",
                         "FreeShipping": "false",
                         "ShippingServiceAdditionalCost": "0.00"  # Added to fix shipping warning
                     }
                 },
                     "DispatchTimeMax": "1",
                     "ProductListingDetails": {
-                        "ISBN": item['isbn13'],
-                        "IncludeStockPhotoURL": "true"
+                        "ISBN": item['isbn13']
+                        
                     },
                     "ItemSpecifics": {
                         "NameValueList": [

@@ -8,6 +8,7 @@ from ebaysdk.trading import Connection
 from ebaysdk.exception import ConnectionError
 from ebaysdk.utils import dict2xml
 import os
+from calculate_price import inclusive_price
 
 
 # Configuration
@@ -161,15 +162,13 @@ def extract_year(date_str):
     return match.group(0) if match else None
 
 
-def calculate_start_price(item):
+def calculate_start_price(item , final_price):
     """
     Calculate listing price based on RRP, discount, and VAT
     Returns rounded price or None if invalid data
     """
     try:
-        # Get required values
-        rrp = float(item['rrp'])
-        discount_percent = float(item['discount'])
+                
         vat_percent = (item['vat_code']).lower()
         
         if vat_percent == 'z':
@@ -180,15 +179,11 @@ def calculate_start_price(item):
             vat_percent = float(5.0)
 
         # Validate input values
-        if any(val < 0 for val in [rrp, discount_percent, vat_percent]):
+        if any(val < 0 for val in [vat_percent]):
             print(f"Invalid negative value in pricing data for item {item.get('id')}")
             return None
 
-        # Calculate discounted price
-        discounted_price = rrp * (1 - (discount_percent / 100))
-        
-        # Calculate net price after VAT
-        net_price = discounted_price / (1 + (vat_percent / 100))
+        net_price = final_price * (1 + (vat_percent / 100))
         
         # Return price rounded to 2 decimal places
         return round(net_price, 2)
@@ -324,7 +319,11 @@ def main():
             if item.get('cover_image'):
                 payload["Item"]["PictureDetails"] = {"PictureURL": [item['cover_image']]}
                 
-            calculated_price = calculate_start_price(item)
+            calculated_price_vat_exclusive = inclusive_price(item)
+            
+            calculated_price  = calculate_start_price(item, calculated_price_vat_exclusive) 
+            
+            print(calculated_price)
             if not calculated_price or calculated_price < 0.99:
                 print(f"Skipping item {item.get('id')} - invalid price calculation")
                 continue

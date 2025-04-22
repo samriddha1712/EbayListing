@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 TABLE_NAME = os.getenv('SUPABASE_TABLE_NAME')
-BATCH_SIZE = 100
+BATCH_SIZE = 5000
 
 def get_existing_columns(supabase: Client) -> List[str]:
     """Retrieve current table columns from Supabase"""

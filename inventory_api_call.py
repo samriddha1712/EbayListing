@@ -4,14 +4,10 @@ import base64
 import re
 import time
 from supabase import create_client, Client
-from ebaysdk.trading import Connection
-from ebaysdk.exception import ConnectionError
-from ebaysdk.utils import dict2xml
 import os
 from calculate_price import inclusive_price
 
-
-# Configuration
+# Configuration (unchanged)
 table_name = os.getenv('SUPABASE_TABLE_NAME')
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
@@ -20,7 +16,7 @@ EBAY_CREDENTIALS = {
     'client_secret': os.getenv('EBAY_CLIENT_SECRET'),
     'dev_id': os.getenv('EBAY_DEV_ID'),
     'redirect_uri': os.getenv('EBAY_REDIRECT_URI'),
-    
+    'merchant_location_key': os.getenv('EBAY_MERCHANT_LOCATION_KEY'),
     'business_policies': {
         'return': '245006369024',
         'payment': os.getenv('EBAY_PAYMENT_POLICY_ID'),
@@ -28,16 +24,15 @@ EBAY_CREDENTIALS = {
     }
 }
 
-# Binding Type Short Codes
+# Binding Type Short Codes (unchanged)
 BINDING_SHORTCODES = {
-    # Exact match mappings
     'Album': 'ALB',
     'Audio Cassette': 'ACS',
     'Audio CD': 'ACD',
     'Bath Book': 'BTH',
     'Blu-ray': 'BRY',
     'Board book': 'BBK',
-    'board_book': 'BBK',  # Alternate format
+    'board_book': 'BBK',
     'Bonded Leather': 'BLE',
     'Calendar': 'CAL',
     'Card Book': 'CRB',
@@ -61,7 +56,7 @@ BINDING_SHORTCODES = {
     'Loose Leaf': 'LSL',
     'Map': 'MAP',
     'Mass Market Paperback': 'MMP',
-    'mass_market': 'MMP',  # Alternate format
+    'mass_market': 'MMP',
     'Misc.': 'MSC',
     'Misc. Supplies': 'MSC',
     'Notebook': 'NTB',
@@ -93,17 +88,14 @@ BINDING_SHORTCODES = {
     'Wall Chart': 'WCH'
 }
 
-
-
+# Existing functions (unchanged)
 def generate_book_title(book_name, author, binding_type=None, publication_year=None, binding_codes=None):
     binding_codes = binding_codes or {}
     ellipsis = "…"
     
-    # Helper to truncate text with ellipsis at end
     def truncate(text, max_len):
         return text[:max_len-1] + ellipsis if len(text) > max_len else text
 
-    # Determine binding abbreviation if present
     binding_abbr = None
     if binding_type:
         if binding_type == 'Paperback':
@@ -113,7 +105,6 @@ def generate_book_title(book_name, author, binding_type=None, publication_year=N
         else:
             binding_abbr = binding_codes.get(binding_type, binding_type)
 
-    # Build components dynamically
     components = {
         'book': book_name,
         'by': "by",
@@ -122,55 +113,36 @@ def generate_book_title(book_name, author, binding_type=None, publication_year=N
         'year': publication_year
     }
 
-    # Generate title variations in priority order
     variations = []
-    
-    # Variation 1: Full format with binding/year
     variations.append(f"{book_name} by {author} {binding_type or ''} Book {publication_year or ''}".strip())
-    
-    # Variation 2: Abbreviated binding
     variations.append(f"{book_name} by {author} {binding_abbr or ''} Book {publication_year or ''}".strip())
-    
-    # Variation 3: Remove "by"
     variations.append(f"{book_name} {author} {binding_abbr or ''} Book {publication_year or ''}".strip())
     
-    # Variation 4: Truncate author
     base_length = len(f"{book_name} ") + len(f" {binding_abbr or ''} Book {publication_year or ''}".strip()) + 1
-    max_author_len = 65 - base_length - 1  # -1 for ellipsis
+    max_author_len = 65 - base_length - 1
     if max_author_len >= 1:
         truncated_author = truncate(author, max_author_len)
         variations.append(f"{book_name} {truncated_author} {binding_abbr or ''} Book {publication_year or ''}".strip())
     
-    # Variation 5: Truncate book name
     base_length = len(f" {author} {binding_abbr or ''} Book {publication_year or ''}".strip()) + 1
-    max_book_len = 65 - base_length - 1  # -1 for ellipsis
+    max_book_len = 65 - base_length - 1
     if max_book_len >= 1:
         truncated_book = truncate(book_name, max_book_len)
         variations.append(f"{truncated_book} {author} {binding_abbr or ''} Book {publication_year or ''}".strip())
     
-    # Find first valid variation
     for title in variations:
         if len(title) <= 65:
-            return title[:65]  # Ensure exact length
+            return title[:65]
     
-    # Final fallback: Book title only with ellipsis
     return truncate(book_name, 62).ljust(65, ellipsis)[:65]
 
 def extract_year(date_str):
-    """Extract year from various date formats"""
     match = re.search(r'\b\d{4}\b', str(date_str))
     return match.group(0) if match else None
 
-
-def calculate_start_price(item , final_price):
-    """
-    Calculate listing price based on RRP, discount, and VAT
-    Returns rounded price or None if invalid data
-    """
+def calculate_start_price(item, final_price):
     try:
-                
         vat_percent = (item['vat_code']).lower()
-        
         if vat_percent == 'z':
             vat_percent = float(0.0)
         elif vat_percent == 's':
@@ -178,14 +150,11 @@ def calculate_start_price(item , final_price):
         else:
             vat_percent = float(5.0)
 
-        # Validate input values
         if any(val < 0 for val in [vat_percent]):
             print(f"Invalid negative value in pricing data for item {item.get('id')}")
             return None
 
         net_price = final_price * (1 + (vat_percent / 100))
-        
-        # Return price rounded to 2 decimal places
         return round(net_price, 2)
     
     except KeyError as e:
@@ -199,15 +168,13 @@ def main():
     # Initialize Supabase
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    # eBay OAuth Flow
+    # eBay OAuth Flow (unchanged)
     auth_url = f"https://auth.ebay.com/oauth2/authorize?client_id={EBAY_CREDENTIALS['client_id']}&redirect_uri={urllib.parse.quote(EBAY_CREDENTIALS['redirect_uri'])}&response_type=code&scope=https://api.ebay.com/oauth/api_scope/sell.inventory"
     print(f"Authorize here: {auth_url}")
     redirect_url = input("Paste redirect URL after authorization: ")
     
-    # Extract authorization code
     code = urllib.parse.parse_qs(urllib.parse.urlparse(redirect_url).query)['code'][0]
     
-    # Get access token
     token_response = requests.post(
         "https://api.ebay.com/identity/v1/oauth2/token",
         headers={
@@ -222,128 +189,108 @@ def main():
     )
     access_token = token_response.json()['access_token']
 
-    # Initialize eBay API connection
-    connection = Connection(
-        debug=False,
-        domain='api.ebay.com',
-        config_file=None,
-        certid=EBAY_CREDENTIALS['client_secret'],
-        appid=EBAY_CREDENTIALS['client_id'],
-        devid=EBAY_CREDENTIALS['dev_id'],
-        token=access_token,
-        siteid=3
-    )
+    # HTTP headers for Inventory API
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Content-Language": "en-US"
+    }
+
     success_count = 0
-    # Process inventory
-    inventory = supabase.table(table_name).select('*').order('publication_year', desc=True).execute().data
+    inventory = supabase.table(table_name).select('*').execute().data
     for item in inventory:
-        
-        if success_count >= 1495:
-            print("1495 items listed, stopping for the day.")
-            break
-        
         try:
             language = item.get('language', 'en')
             if language == 'en':
                 language = 'English'
-            
 
-            # Format components
             binding = item.get('binding', 'unknown')
             pub_year = extract_year(item.get('publication_year'))
             title = generate_book_title(
                 item['title'],
                 item['author'], binding,
                 pub_year, BINDING_SHORTCODES
-                
             )
 
-            # Build listing payload
-            payload = {
-                "Item": {
-                    "Title": title,
-                    "Description": item.get('description', 'No description available'),
-                    "PrimaryCategory": {"CategoryID": "29290"},  
-                    "ConditionID": "1000",  
-                    "Currency": "GBP",
-                    "ListingType": "FixedPriceItem",
-                    "StartPrice": '45',
-                    "Quantity": str(item['stock']),
-                    "Country": "GB",
-                    "Location": "Port Glasgow",
-                    "ListingDuration": "GTC",
-                    "BusinessPolicies": {
-                        
-                        "PaymentPolicyID": EBAY_CREDENTIALS['business_policies']['payment']
-                        
-                    },
-                    "ReturnPolicy": {
-                    "ReturnsAcceptedOption": "ReturnsAccepted",
-                    "RefundOption": "MoneyBack",
-                    "ReturnsWithinOption": "Days_30",
-                    "ShippingCostPaidByOption": "Buyer"
-                    },
-                    "ShippingDetails": {
-                    "ShippingServiceOptions": {
-                        "ShippingServicePriority": "1",
-                        "ShippingService": "UK_RoyalMailSecondClassStandard",
-                        "ShippingServiceCost": "3.00",
-                        "FreeShipping": "false",
-                        "ShippingServiceAdditionalCost": "0.00"  # Added to fix shipping warning
-                    }
-                },
-                    "DispatchTimeMax": "1",
-                    "ProductListingDetails": {
-                        "ISBN": item['isbn13']
-                        
-                    },
-                    "ItemSpecifics": {
-                        "NameValueList": [
-                            {"Name": "Title", "Value": [title]},
-                            {"Name": "Author", "Value": [item['author'].split()[-1]]},
-                            {"Name": "Binding", "Value": [binding]},
-                            {"Name": "Language", "Value": [language]},
-                            {"Name": "ISBN", "Value": [item.get('isbn13', 'Unknown')]},
-                            {"Name": "Publisher", "Value": [item.get('publisher', 'Unknown')]}
-                        ]
-                    }
-                },
-                "WarningLevel": "High",
-                "ErrorLanguage": "en_US",
-                  
+            sku = item['isbn13']
+            inventory_item_payload = {
+            "sku": sku,
+            "condition": "NEW",
+            "locale": "en_GB",
+            "product": {
+                "title": title,  # Ensure you have a valid title
+                "description": item.get('description', 'No description available'),
+                "imageUrls": [item['cover_image']] if item.get('cover_image') else [],
+                "aspects": {
+                    "Author": [item.get('author', 'Unknown Author')],
+                    "Binding": [item.get('binding', 'Unknown Binding')],
+                    "Language": [item.get('language', 'English')],
+                    "Publication Year": [item['publication_year']],
+                    "Publisher": [item.get('publisher', 'Unknown Publisher')],
+                    "ISBN": [item['isbn13']]
+                }
+            },
+            "availability": {
+                "shipToLocationAvailability": {
+                    "quantity": item['stock']
+                }
             }
+        }
 
-            # Add publication year if available
-            if pub_year:
-                payload["Item"]["ItemSpecifics"]["NameValueList"].append(
-                    {"Name": "Publication Year", "Value": [pub_year]}
-                )
-
-            # Add image if available
-            if item.get('cover_image'):
-                payload["Item"]["PictureDetails"] = {"PictureURL": [item['cover_image']]}
-                
+            # Create or update inventory item
+            inventory_url = f"https://api.ebay.com/sell/inventory/v1/inventory_item/{sku}"
+            response = requests.put(inventory_url, headers=headers, json=inventory_item_payload)
+            
+            if response.status_code != 204:
+                print(f"Error creating inventory item for {sku}: {response.text}")
+                continue
+            print("Success Listed")
             calculated_price_vat_exclusive = inclusive_price(item)
-            
-            calculated_price  = calculate_start_price(item, calculated_price_vat_exclusive) 
-            
-            print(calculated_price)
+            calculated_price = calculate_start_price(item, calculated_price_vat_exclusive)
             if not calculated_price or calculated_price < 0.99:
                 print(f"Skipping item {item.get('id')} - invalid price calculation")
                 continue
-            payload["Item"]["StartPrice"] = f"{calculated_price:.2f}" 
-            
 
+            offer_payload = {
+                "sku": sku,
+                "marketplaceId": "EBAY_GB",
+                "format": "FIXED_PRICE",
+                "availableQuantity": item['stock'],
+                "categoryId": "268",
+                "listingPolicies": {
+                    "paymentPolicyId": EBAY_CREDENTIALS['business_policies']['payment'],
+                    "returnPolicyId": EBAY_CREDENTIALS['business_policies']['return'],
+                    "fulfillmentPolicyId": EBAY_CREDENTIALS['business_policies']['shipping']
+                },
+                "pricingSummary": {
+                    "price": {
+                        "value": f"{calculated_price:.2f}",
+                        "currency": "GBP"
+                    }
+                },
+                "merchantLocationKey": EBAY_CREDENTIALS['merchant_location_key']
+            }
 
-            # Submit listing
-            response = connection.execute('AddFixedPriceItem', payload)
-            success_count += 1
-            
-            if response.dict()['Ack'] == 'Warning':
-                print(f"Successfully listed: {title} (ID: {response.dict()['ItemID']})")
+            # Create offer
+            offer_url = "https://api.ebay.com/sell/inventory/v1/offer"
+            response = requests.post(offer_url, headers=headers, json=offer_payload)
+            if response.status_code == 201:
+                offer_id = response.json()['offerId']
             else:
-                print(f"Error listing {title}: {response.dict().get('Errors', 'Unknown error')}")
-            
+                print(f"Error creating offer for {sku}: {response.text}")
+                continue
+
+            # Publish offer
+            publish_url = f"https://api.ebay.com/sell/inventory/v1/offer/{offer_id}/publish"
+            response = requests.post(publish_url, headers=headers)
+            if response.status_code == 200:
+                listing_id = response.json()['listingId']
+                print(f"Successfully listed: {item['title']} (Listing ID: {listing_id})")
+                success_count += 1
+            else:
+                print(f"Error publishing offer for {sku}: {response.text}")
+
             time.sleep(1)  # Rate limit
 
         except Exception as e:

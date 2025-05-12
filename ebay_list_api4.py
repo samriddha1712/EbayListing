@@ -4,12 +4,10 @@ import base64
 import re
 import time
 from supabase import create_client, Client
-from ebaysdk.trading import Connection
-from ebaysdk.exception import ConnectionError
-from ebaysdk.utils import dict2xml
+import xml.etree.ElementTree as ET
+from xml.etree.ElementTree import Element, SubElement, tostring
 import os
 from calculate_price import inclusive_price
-
 
 # Configuration
 table_name = os.getenv('SUPABASE_TABLE_NAME')
@@ -20,11 +18,10 @@ EBAY_CREDENTIALS = {
     'client_secret': os.getenv('EBAY_CLIENT_SECRET'),
     'dev_id': os.getenv('EBAY_DEV_ID'),
     'redirect_uri': os.getenv('EBAY_REDIRECT_URI'),
-    
     'business_policies': {
-        'return': '245006369024',
-        'payment': os.getenv('EBAY_PAYMENT_POLICY_ID'),
-        'shipping': '245006370024'
+        'return_policy_id': '245006369024',
+        'payment_policy_id': os.getenv('EBAY_PAYMENT_POLICY_ID'),
+        'shipping_policy_id': '245006370024'
     }
 }
 
@@ -195,24 +192,114 @@ def calculate_start_price(item , final_price):
         print(f"Invalid pricing data for item {item.get('id')}: {str(e)}")
         return None
 
+def build_ebay_xml(item_data, access_token, calculated_price, title, binding_type, pub_year):
+    """Build XML request matching the example structure"""
+    root = Element('VerifyAddItemRequest', xmlns='urn:ebay:apis:eBLBaseComponents')
+    
+    # Requester Credentials
+    requester = SubElement(root, 'RequesterCredentials')
+    SubElement(requester, 'eBayAuthToken').text = access_token
+    
+    # Item container
+    item = SubElement(root, 'Item')
+    
+    # Title and Description
+    SubElement(item, 'Title').text = title
+    SubElement(item, 'Description').text = item_data.get('description', 'No description available')
+    
+    # Pictures
+    if item_data.get('cover_image'):
+        pic_details = SubElement(item, 'PictureDetails')
+        SubElement(pic_details, 'PictureURL').text = item_data['cover_image']
+    
+    # Item Specifics
+    specifics = SubElement(item, 'ItemSpecifics')
+    spec_data = [
+        ('Sport', ['Baseball']),  # Hardcoded per example
+        ('Condition', ['Ungraded']),
+        ('Publication Year', [pub_year]) if pub_year else None,
+        ('Author', [item_data['author']]),
+        ('Publisher', [item_data.get('publisher', 'Unknown')])
+    ]
+    
+    for entry in filter(None, spec_data):
+        nv_list = SubElement(specifics, 'NameValueList')
+        SubElement(nv_list, 'Name').text = entry[0]
+        SubElement(nv_list, 'Value').text = entry[1][0]
+
+    # Condition Descriptors (from example)
+    cond_desc = SubElement(item, 'ConditionDescriptors')
+    descriptor = SubElement(cond_desc, 'ConditionDescriptor')
+    SubElement(descriptor, 'Name').text = '40001'  # Condition type ID
+    SubElement(descriptor, 'Value').text = 'Like New Or Better'  # Condition description
+
+    # Category Information (baseball cards category from example)
+    primary_cat = SubElement(item, 'PrimaryCategory')
+    SubElement(primary_cat, 'CategoryID').text = '29290'
+    SubElement(primary_cat, 'CategoryName').text = 'Books'
+
+    # Pricing and Quantity
+    SubElement(item, 'StartPrice').text = f"{calculated_price:.2f}"
+    SubElement(item, 'CategoryMappingAllowed').text = 'true'
+    SubElement(item, 'Quantity').text = str(item_data['stock'])
+
+    # Shipping Configuration (from example)
+    shipping = SubElement(item, 'ShippingDetails')
+    SubElement(shipping, 'ShippingDiscountProfileID').text = '0'
+    SubElement(shipping, 'InternationalShippingDiscountProfileID').text = '0'
+    
+    pkg_details = SubElement(shipping, 'ShippingPackageDetails')
+    SubElement(pkg_details, 'MeasurementUnit').text = 'English'
+    SubElement(pkg_details, 'PackageDepth', {'unit':'in', 'measurementSystem':'English'}).text = '1'
+    SubElement(pkg_details, 'PackageLength', {'unit':'in', 'measurementSystem':'English'}).text = '1'
+    SubElement(pkg_details, 'PackageWidth', {'unit':'in', 'measurementSystem':'English'}).text = '1'
+    SubElement(pkg_details, 'ShippingIrregular').text = 'false'
+    SubElement(pkg_details, 'ShippingPackage').text = 'PackageThickEnvelope'
+    SubElement(pkg_details, 'WeightMajor', {'unit':'lbs'}).text = '0'
+    SubElement(pkg_details, 'WeightMinor', {'unit':'oz'}).text = '1'
+
+    # Seller Profiles (from example structure)
+    seller_profiles = SubElement(item, 'SellerProfiles')
+    
+    payment_profile = SubElement(seller_profiles, 'SellerPaymentProfile')
+    SubElement(payment_profile, 'PaymentProfileID').text = EBAY_CREDENTIALS['business_policies']['payment_policy_id']
+    
+    return_profile = SubElement(seller_profiles, 'SellerReturnProfile')
+    SubElement(return_profile, 'ReturnProfileID').text = EBAY_CREDENTIALS['business_policies']['return_policy_id']
+    
+    shipping_profile = SubElement(seller_profiles, 'SellerShippingProfile')
+    SubElement(shipping_profile, 'ShippingProfileID').text = EBAY_CREDENTIALS['business_policies']['shipping_policy_id']
+
+    # Required Fields from Example
+    SubElement(item, 'ConditionID').text = '4000'  # Ungraded condition code
+    SubElement(item, 'ConditionDisplayName').text = 'Ungraded'
+    SubElement(item, 'Country').text = 'GB'
+    SubElement(item, 'Currency').text = 'GBP'
+    SubElement(item, 'DispatchTimeMax').text = '3'
+    SubElement(item, 'ListingDuration').text = 'GTC'
+    SubElement(item, 'ListingType').text = 'FixedPriceItem'
+    SubElement(item, 'PostalCode').text = 'PA145YU'  # Replace with your postal code
+    SubElement(item, 'Site').text = 'UK'
+
+    return ET.tostring(root, encoding='utf-8', method='xml')
+
 def main():
-    # Initialize Supabase
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
     # eBay OAuth Flow
     auth_url = f"https://auth.ebay.com/oauth2/authorize?client_id={EBAY_CREDENTIALS['client_id']}&redirect_uri={urllib.parse.quote(EBAY_CREDENTIALS['redirect_uri'])}&response_type=code&scope=https://api.ebay.com/oauth/api_scope/sell.inventory"
     print(f"Authorize here: {auth_url}")
     redirect_url = input("Paste redirect URL after authorization: ")
-    
-    # Extract authorization code
     code = urllib.parse.parse_qs(urllib.parse.urlparse(redirect_url).query)['code'][0]
-    
+
     # Get access token
     token_response = requests.post(
         "https://api.ebay.com/identity/v1/oauth2/token",
         headers={
             "Content-Type": "application/x-www-form-urlencoded",
-            "Authorization": "Basic " + base64.b64encode(f"{EBAY_CREDENTIALS['client_id']}:{EBAY_CREDENTIALS['client_secret']}".encode()).decode()
+            "Authorization": "Basic " + base64.b64encode(
+                f"{EBAY_CREDENTIALS['client_id']}:{EBAY_CREDENTIALS['client_secret']}".encode()
+            ).decode()
         },
         data={
             "grant_type": "authorization_code",
@@ -222,133 +309,78 @@ def main():
     )
     access_token = token_response.json()['access_token']
 
-    # Initialize eBay API connection
-    connection = Connection(
-        debug=False,
-        domain='api.ebay.com',
-        config_file=None,
-        certid=EBAY_CREDENTIALS['client_secret'],
-        appid=EBAY_CREDENTIALS['client_id'],
-        devid=EBAY_CREDENTIALS['dev_id'],
-        token=access_token,
-        siteid=3
-    )
     success_count = 0
-    # Process inventory
-    inventory = supabase.table(table_name).select('*').order('publication_year', desc=True).execute().data
-    for item in inventory:
-        
-        if success_count >= 1495:
-            print("1495 items listed, stopping for the day.")
-            break
-        
-        try:
-            language = item.get('language', 'en')
-            if language == 'en':
-                language = 'English'
-            
+    inventory = supabase.table(table_name).select('*').execute().data
 
-            # Format components
-            binding = item.get('binding', 'unknown')
+    for item in inventory:
+        try:
+            # Generate listing details
+            binding = item.get('binding', 'Unknown')
             pub_year = extract_year(item.get('publication_year'))
             title = generate_book_title(
                 item['title'],
-                item['author'], binding,
-                pub_year, BINDING_SHORTCODES
-                
+                item['author'],
+                binding,
+                pub_year,
+                BINDING_SHORTCODES
             )
 
-            # Build listing payload
-            payload = {
-                "Item": {
-                    "Title": title,
-                    "Description": item.get('description', 'No description available'),
-                    "PrimaryCategory": {"CategoryID": "29290"},  
-                    "ConditionID": "1000",  
-                    "Currency": "GBP",
-                    "ListingType": "FixedPriceItem",
-                    "StartPrice": '45',
-                    "Quantity": str(item['stock']),
-                    "Country": "GB",
-                    "Location": "Port Glasgow",
-                    "ListingDuration": "GTC",
-                    "BusinessPolicies": {
-                        
-                        "PaymentPolicyID": EBAY_CREDENTIALS['business_policies']['payment']
-                        
-                    },
-                    "ReturnPolicy": {
-                    "ReturnsAcceptedOption": "ReturnsAccepted",
-                    "RefundOption": "MoneyBack",
-                    "ReturnsWithinOption": "Days_30",
-                    "ShippingCostPaidByOption": "Buyer"
-                    },
-                    "ShippingDetails": {
-                    "ShippingServiceOptions": {
-                        "ShippingServicePriority": "1",
-                        "ShippingService": "UK_RoyalMailSecondClassStandard",
-                        "ShippingServiceCost": "3.00",
-                        "FreeShipping": "false",
-                        "ShippingServiceAdditionalCost": "0.00"  # Added to fix shipping warning
-                    }
-                },
-                    "DispatchTimeMax": "1",
-                    "ProductListingDetails": {
-                        "ISBN": item['isbn13']
-                        
-                    },
-                    "ItemSpecifics": {
-                        "NameValueList": [
-                            {"Name": "Title", "Value": [title]},
-                            {"Name": "Author", "Value": [item['author'].split()[-1]]},
-                            {"Name": "Binding", "Value": [binding]},
-                            {"Name": "Language", "Value": [language]},
-                            {"Name": "ISBN", "Value": [item.get('isbn13', 'Unknown')]},
-                            {"Name": "Publisher", "Value": [item.get('publisher', 'Unknown')]}
-                        ]
-                    }
-                },
-                "WarningLevel": "High",
-                "ErrorLanguage": "en_US",
-                  
-            }
-
-            # Add publication year if available
-            if pub_year:
-                payload["Item"]["ItemSpecifics"]["NameValueList"].append(
-                    {"Name": "Publication Year", "Value": [pub_year]}
-                )
-
-            # Add image if available
-            if item.get('cover_image'):
-                payload["Item"]["PictureDetails"] = {"PictureURL": [item['cover_image']]}
-                
-            calculated_price_vat_exclusive = inclusive_price(item)
+            # Calculate price
+            calculated_price_vat_excl = inclusive_price(item)
+            calculated_price = calculate_start_price(item, calculated_price_vat_excl)
             
-            calculated_price  = calculate_start_price(item, calculated_price_vat_exclusive) 
-            
-            print(calculated_price)
             if not calculated_price or calculated_price < 0.99:
-                print(f"Skipping item {item.get('id')} - invalid price calculation")
+                print(f"Skipping item {item.get('id')} - invalid price")
                 continue
-            payload["Item"]["StartPrice"] = f"{calculated_price:.2f}" 
-            
 
+            # Build XML request
+            xml_data = build_ebay_xml(
+                item_data=item,
+                access_token=access_token,
+                calculated_price=calculated_price,
+                title=title,
+                binding_type=binding,
+                pub_year=pub_year
+            )
 
-            # Submit listing
-            response = connection.execute('AddFixedPriceItem', payload)
-            success_count += 1
+            print(xml_data)
+
+            # Send request to eBay
+            headers = {
+                'X-EBAY-API-COMPATIBILITY-LEVEL': '1245',
+                'X-EBAY-API-CALL-NAME': 'VerifyAddItem',
+                'X-EBAY-API-SITEID': '3',
+                'Content-Type': 'text/xml'
+            }
             
-            if response.dict()['Ack'] == 'Warning':
-                print(f"Successfully listed: {title} (ID: {response.dict()['ItemID']})")
+            response = requests.post(
+                'https://api.ebay.com/ws/api.dll',
+                data=xml_data,
+                headers=headers
+            )
+
+            # Process response
+            if response.status_code == 200:
+                response_root = ET.fromstring(response.content)
+                ack = response_root.find('Ack').text
+                if ack in ['Success', 'Warning']:
+                    item_id = response_root.find('ItemID').text
+                    print(f"Successfully listed: {title} (ID: {item_id})")
+                    success_count += 1
+                else:
+                    errors = response_root.findall('Errors')
+                    for error in errors:
+                        print(f"Error: {error.find('LongMessage').text}")
             else:
-                print(f"Error listing {title}: {response.dict().get('Errors', 'Unknown error')}")
-            
-            time.sleep(1)  # Rate limit
+                print(f"API Error: {response.status_code} - {response.text}")
+
+            time.sleep(1)  # Rate limiting
 
         except Exception as e:
             print(f"Failed to process item {item.get('id')}: {str(e)}")
             continue
+
+    print(f"Successfully listed {success_count} items")
 
 if __name__ == "__main__":
     main()

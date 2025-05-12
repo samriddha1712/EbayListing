@@ -9,6 +9,7 @@ from ebaysdk.exception import ConnectionError
 from ebaysdk.utils import dict2xml
 import os
 from calculate_price import inclusive_price
+from xml.sax.saxutils import escape
 
 
 # Configuration
@@ -95,66 +96,76 @@ BINDING_SHORTCODES = {
 
 
 
-def generate_book_title(book_name, author, binding_type=None, publication_year=None, binding_codes=None):
+def generate_book_title(
+    book_name,
+    author,
+    binding_type=None,
+    publication_year=None,
+    binding_codes=None,
+    max_len=65
+):
+   
     binding_codes = binding_codes or {}
-    ellipsis = "…"
-    
-    # Helper to truncate text with ellipsis at end
-    def truncate(text, max_len):
-        return text[:max_len-1] + ellipsis if len(text) > max_len else text
+    # full-text binding -> code map
+    default_map = {'Paperback': 'Pb', 'Hardcover': 'Hc'}
+    code_map = {**default_map, **binding_codes}
 
-    # Determine binding abbreviation if present
-    binding_abbr = None
+    # 1) build the full title
+    parts = [book_name, "by", author]
     if binding_type:
-        if binding_type == 'Paperback':
-            binding_abbr = 'PB'
-        elif binding_type == 'Hardcover':
-            binding_abbr = 'HC'
-        else:
-            binding_abbr = binding_codes.get(binding_type, binding_type)
+        parts += [binding_type, "Book"]
+    if publication_year:
+        parts.append(str(publication_year))
+    title = " ".join(parts)
 
-    # Build components dynamically
-    components = {
-        'book': book_name,
-        'by': "by",
-        'author': author,
-        'binding': binding_abbr,
-        'year': publication_year
-    }
+    def clean(s):
+        # collapse any extra spaces
+        return re.sub(r'\s+', ' ', s).strip()
 
-    # Generate title variations in priority order
-    variations = []
-    
-    # Variation 1: Full format with binding/year
-    variations.append(f"{book_name} by {author} {binding_type or ''} Book {publication_year or ''}".strip())
-    
-    # Variation 2: Abbreviated binding
-    variations.append(f"{book_name} by {author} {binding_abbr or ''} Book {publication_year or ''}".strip())
-    
-    # Variation 3: Remove "by"
-    variations.append(f"{book_name} {author} {binding_abbr or ''} Book {publication_year or ''}".strip())
-    
-    # Variation 4: Truncate author
-    base_length = len(f"{book_name} ") + len(f" {binding_abbr or ''} Book {publication_year or ''}".strip()) + 1
-    max_author_len = 65 - base_length - 1  # -1 for ellipsis
-    if max_author_len >= 1:
-        truncated_author = truncate(author, max_author_len)
-        variations.append(f"{book_name} {truncated_author} {binding_abbr or ''} Book {publication_year or ''}".strip())
-    
-    # Variation 5: Truncate book name
-    base_length = len(f" {author} {binding_abbr or ''} Book {publication_year or ''}".strip()) + 1
-    max_book_len = 65 - base_length - 1  # -1 for ellipsis
-    if max_book_len >= 1:
-        truncated_book = truncate(book_name, max_book_len)
-        variations.append(f"{truncated_book} {author} {binding_abbr or ''} Book {publication_year or ''}".strip())
-    
-    # Find first valid variation
-    for title in variations:
-        if len(title) <= 65:
-            return title[:65]  # Ensure exact length
-    
-    # Final fallback: Book title only with ellipsis
-    return truncate(book_name, 62).ljust(65, ellipsis)[:65]
+    title = clean(title)
+    if len(title) <= max_len:
+        return title
+
+    # 2) remove the year
+    if publication_year:
+        # drop the trailing year token
+        title = re.sub(r'\s+' + re.escape(str(publication_year)) + r'$', '', title)
+        title = clean(title)
+        if len(title) <= max_len:
+            return title
+
+    # 3) convert binding to code
+    if binding_type and binding_type in code_map:
+        # replace the full word with its code
+        title = re.sub(
+            r'\b' + re.escape(binding_type) + r'\b',
+            code_map[binding_type],
+            title
+        )
+        title = clean(title)
+        if len(title) <= max_len:
+            return title
+
+    # 4) remove "by"
+    title = re.sub(r'\bby\b', '', title)
+    title = clean(title)
+    if len(title) <= max_len:
+        return title
+
+    # 5) abbreviate author (FirstName LastName → F.LastName)
+    names = author.split()
+    if len(names) > 1:
+        abbr_author = names[0][0] + "." + " ".join(names[1:])
+    else:
+        abbr_author = names[0][0] + "."
+    # swap out the full author for the abbreviated one
+    title = title.replace(author, abbr_author)
+    title = clean(title)
+    if len(title) <= max_len:
+        return title
+
+    # 6) final fallback: cut and add "..."
+    return title[: max_len - 3].rstrip() + "..."
 
 def extract_year(date_str):
     """Extract year from various date formats"""
@@ -194,6 +205,10 @@ def calculate_start_price(item , final_price):
     except (TypeError, ValueError) as e:
         print(f"Invalid pricing data for item {item.get('id')}: {str(e)}")
         return None
+    
+    
+def xml_safe(text):
+    return escape(text, {"\"": "&quot;", "'": "&apos;"})
 
 def main():
     # Initialize Supabase
@@ -238,7 +253,7 @@ def main():
     inventory = supabase.table(table_name).select('*').order('publication_year', desc=True).execute().data
     for item in inventory:
         
-        if success_count >= 1495:
+        if success_count >= 190:
             print("1495 items listed, stopping for the day.")
             break
         
@@ -260,19 +275,33 @@ def main():
 
             # Build listing payload
             payload = {
-                "Item": {
-                    "Title": title,
-                    "Description": item.get('description', 'No description available'),
-                    "PrimaryCategory": {"CategoryID": "29290"},  
-                    "ConditionID": "1000",  
-                    "Currency": "GBP",
-                    "ListingType": "FixedPriceItem",
-                    "StartPrice": '45',
-                    "Quantity": str(item['stock']),
-                    "Country": "GB",
-                    "Location": "Port Glasgow",
-                    "ListingDuration": "GTC",
-                    "BusinessPolicies": {
+    "Item": {
+        "Title": title,
+        "Description": f"<![CDATA[{item.get('description', 'No description available')}]]>",
+        "PrimaryCategory": {"CategoryID": "261186"},
+        "StartPrice": "9.99",
+        "CategoryMappingAllowed": "true",       # optional but recommended
+        "Country": "GB",
+        "Currency": "GBP",
+        "ConditionID": "1000",                 # e.g. 3000 = Used
+        "DispatchTimeMax": "1",
+        "ListingDuration": "GTC",
+        "ListingType": "FixedPriceItem",
+        "Quantity": str(item['stock']),
+        "Location": "Port Glasgow",
+        "PostalCode": "PA145YU",
+        "ItemSpecifics": {
+                        "NameValueList": [
+                            {"Name": "Title", "Value": [title]},
+                            {"Name": "Author", "Value": [item['author'].split()[-1]]},
+                            {"Name": "Binding", "Value": [binding]},
+                            {"Name": "Language", "Value": [language]},
+                            {"Name": "ISBN", "Value": [item.get('isbn13', 'Unknown')]},
+                            {"Name": "Publisher", "Value": [item.get('publisher', 'Unknown')]}
+                        ]
+                    },
+                
+        "BusinessPolicies": {
                         
                         "PaymentPolicyID": EBAY_CREDENTIALS['business_policies']['payment']
                         
@@ -292,26 +321,13 @@ def main():
                         "ShippingServiceAdditionalCost": "0.00"  # Added to fix shipping warning
                     }
                 },
-                    "DispatchTimeMax": "1",
-                    "ProductListingDetails": {
-                        "ISBN": item['isbn13']
-                        
-                    },
-                    "ItemSpecifics": {
-                        "NameValueList": [
-                            {"Name": "Title", "Value": [title]},
-                            {"Name": "Author", "Value": [item['author'].split()[-1]]},
-                            {"Name": "Binding", "Value": [binding]},
-                            {"Name": "Language", "Value": [language]},
-                            {"Name": "ISBN", "Value": [item.get('isbn13', 'Unknown')]},
-                            {"Name": "Publisher", "Value": [item.get('publisher', 'Unknown')]}
-                        ]
-                    }
-                },
-                "WarningLevel": "High",
-                "ErrorLanguage": "en_US",
-                  
-            }
+                    
+                    
+            "ProductListingDetails": {
+                "ISBN": item['isbn13']
+            },
+    }
+}
 
             # Add publication year if available
             if pub_year:
@@ -336,6 +352,7 @@ def main():
 
 
             # Submit listing
+            print(f"{payload}\n\n")
             response = connection.execute('AddFixedPriceItem', payload)
             success_count += 1
             

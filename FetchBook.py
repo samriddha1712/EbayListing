@@ -10,7 +10,7 @@ from ftplib import FTP_TLS
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from tqdm import tqdm
-from upload_supa import upload_csv_to_supabase
+from upload_supaV2 import upload_csv_to_supabase
 
 # Load environment variables
 load_dotenv()

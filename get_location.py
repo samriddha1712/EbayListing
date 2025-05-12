@@ -14,15 +14,15 @@ LOCATION_KEY     = os.getenv("EBAY_LOCATION_KEY", "LondonWh1")
 LOCATION_PAYLOAD = {
     "location": {
         "address": {
-            "addressLine1": "10 Downing Street",
-            "city":          "London",
-            "stateOrProvince":"England",
-            "postalCode":    "SW1A 2AA",
+            "addressLine1": "9 Gold Drive",
+            "city":          "Port Glasgow",
+            "stateOrProvince":"Inverclyde",
+            "postalCode":    "PA14 5YU",
             "country":       "GB"
         }
     },
     "locationTypes": ["WAREHOUSE"],
-    "name":               "Switzerland Warehouse 1",
+    "name":               "Robert_Book_Service",
     "merchantLocationStatus": "ENABLED"
     
 }

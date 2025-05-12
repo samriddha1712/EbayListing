@@ -10,8 +10,10 @@ from ebaysdk.utils import dict2xml
 from xml.sax.saxutils import escape
 import os
 from calculate_price import inclusive_price
+from typing import List
 
 # Configuration
+RUN_SCRIPT = os.getenv('RUN_SCRIPT')
 table_name = os.getenv('SUPABASE_TABLE_NAME')
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
@@ -26,6 +28,12 @@ EBAY_CREDENTIALS = {
         'shipping': '245006370024'
     }
 }
+refresh_token = os.getenv('REFRESH_TOKEN')
+
+TOKEN_LIFESPAN = 1.55 * 3600
+
+access_token = None
+token_obtained_ts = 0.0
 
 # Binding Type Short Codes
 BINDING_SHORTCODES = {
@@ -93,45 +101,109 @@ BINDING_SHORTCODES = {
 }  # (unchanged for brevity)
 
 
-def generate_book_title(book_name, author, binding_type=None, publication_year=None, binding_codes=None, max_len=65):
+def generate_book_title(
+    book_name: str = '',
+    author: str = '',
+    binding_type: str = None,
+    publication_year: str = None,
+    binding_codes: dict = None,
+    max_len: int = 65
+) -> str:
+    """
+    Construct a concise title from available info. Missing fields are skipped gracefully.
+    """
     binding_codes = binding_codes or {}
     default_map = {'Paperback': 'Pb', 'Hardcover': 'Hc'}
     code_map = {**default_map, **binding_codes}
 
-    parts = [book_name, 'by', author]
+    parts: List[str] = []
+    # Add book name
+    if book_name:
+        parts.append(book_name)
+    # Add author
+    if author:
+        parts.extend(['by', author])
+    # Add binding type
     if binding_type:
-        parts += [binding_type, 'Book']
+        parts.extend([binding_type, 'Book'])
+    # Add publication year
     if publication_year:
         parts.append(str(publication_year))
+
+    # Join and normalize whitespace
     title = ' '.join(parts)
     title = re.sub(r'\s+', ' ', title).strip()
+
+    # If within limits, return early
     if len(title) <= max_len:
         return title
 
-    if publication_year:
-        title = re.sub(r'\s+' + re.escape(str(publication_year)) + r'$', '', title).strip()
+    # Remove publication year if too long
+    if publication_year and title.endswith(str(publication_year)):
+        title = title[:-(len(str(publication_year))+1)].strip()
         if len(title) <= max_len:
             return title
 
+    # Replace binding_type with shortcode
     if binding_type and binding_type in code_map:
-        title = re.sub(r'\b' + re.escape(binding_type) + r'\b', code_map[binding_type], title).strip()
+        title = re.sub(
+            rf'\b{re.escape(binding_type)}\b',
+            code_map[binding_type],
+            title
+        ).strip()
         if len(title) <= max_len:
             return title
 
-    title = re.sub(r'\bby\b', '', title).strip()
-    if len(title) <= max_len:
-        return title
+    # Remove 'by' to shorten
+    title_no_by = re.sub(r'\bby\b', '', title).strip()
+    if len(title_no_by) <= max_len:
+        return title_no_by
 
-    names = author.split()
-    if len(names) > 1:
-        abbr_author = names[0][0] + '.' + ' '.join(names[1:])
-    else:
-        abbr_author = names[0][0] + '.'
-    title = title.replace(author, abbr_author).strip()
-    if len(title) <= max_len:
-        return title
+    # Abbreviate author
+    if author:
+        names = author.split()
+        if len(names) > 1:
+            abbr_author = names[0][0] + '. ' + ' '.join(names[1:])
+        else:
+            abbr_author = names[0][0] + '.'
+        title = title.replace(author, abbr_author).strip()
+        if len(title) <= max_len:
+            return title
 
+    # Fallback to hard truncate
     return title[:max_len-3].rstrip() + '...'
+
+
+def refresh_access_token():
+    global access_token, token_obtained_ts, connection
+    resp = requests.post(
+        "https://api.ebay.com/identity/v1/oauth2/token",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Authorization": "Basic " + base64.b64encode(
+                f"{EBAY_CREDENTIALS['client_id']}:{EBAY_CREDENTIALS['client_secret']}".encode()
+            ).decode()
+        },
+        data={
+            "grant_type":     "refresh_token",
+            "refresh_token":  refresh_token,
+            "scope":          "https://api.ebay.com/oauth/api_scope/sell.inventory"
+        }
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    access_token = data["access_token"]
+    token_obtained_ts = time.time()
+
+    # update the Connection object if it already exists
+    if 'connection' in globals():
+        connection.token = access_token
+        
+        
+def ensure_token_valid():
+    if access_token is None or (time.time() - token_obtained_ts) > TOKEN_LIFESPAN:
+        refresh_access_token()
+    return access_token
 
 
 def extract_year(date_str):
@@ -178,37 +250,59 @@ def stock_visiblity(actual_stock):
     return visible_quantity
 
 
+def get_existing_columns(supabase: Client, table_name: str) -> List[str]:
+    """Retrieve current table columns from Supabase using a row sample"""
+    try:
+        result = supabase.table(table_name).select("*").limit(1).execute()
+        if result.data and len(result.data) > 0:
+            return list(result.data[0].keys())
+        elif result.data == []:
+            # No rows, but table exists: get from 'columns' attribute
+            # Some Supabase clients return column metadata in response
+            return result.model_dump().get("columns", [])
+        return []
+    except Exception as e:
+        print(f"❌ Column detection error: {e}")
+        return []
+
 
 def main():
-    
-    scopes = "https://api.ebay.com/oauth/api_scope/sell.inventory" \
-         "https://api.ebay.com/oauth/api_scope/offline_access"
-         
-    encoded_scopes = urllib.parse.quote(scopes, safe='')
-    
-    
+
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    print("Connected to Supabase")
+    
+    columns = get_existing_columns(supabase, table_name)
+    print(f"🧾 Columns in {table_name}:", columns)
 
-    auth_url = (
-        f"https://auth.ebay.com/oauth2/authorize?client_id={EBAY_CREDENTIALS['client_id']}"
-        f"&redirect_uri={urllib.parse.quote(EBAY_CREDENTIALS['redirect_uri'])}&response_type=code"
-        f"&scope=https://api.ebay.com/oauth/api_scope/sell.inventory"
-    )
-    print(f"Authorize here: {auth_url}")
-    redirect_url = input("Paste redirect URL after authorization: ")
-    code = urllib.parse.parse_qs(urllib.parse.urlparse(redirect_url).query)['code'][0]
+    if "listed" in columns:
+        print("ℹ️ 'listed' column already exists.")
+    else:
+        print("➕ 'listed' column missing — adding it...")  
+    
+        sql = f"""
+        ALTER TABLE {table_name}
+        ADD COLUMN IF NOT EXISTS listed boolean
+            DEFAULT FALSE NOT NULL;
+        """
+        try:
+        # Execute via RPC
+            res = supabase.rpc('execute_sql', {'sql': sql}).execute()
+            
+            code = getattr(res, 'status_code', None)
+            if code is not None and code >= 400:
+                print(f"❌ Failed to add 'listed' column ({code}):", res.data)
+            else:
+                print("✅ 'listed' column is ensured (default FALSE).")
+        except Exception as e:
+        # catch network/validation errors
+            print("❌ RPC call failed:", e)
 
-    token_response = requests.post(
-        "https://api.ebay.com/identity/v1/oauth2/token",
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Authorization": "Basic " + base64.b64encode(
-                f"{EBAY_CREDENTIALS['client_id']}:{EBAY_CREDENTIALS['client_secret']}".encode()
-            ).decode()
-        },
-        data={"grant_type": "authorization_code", "code": code, "redirect_uri": EBAY_CREDENTIALS['redirect_uri']}
-    )
-    access_token = token_response.json().get('access_token')
+        
+    
+    
+    
+    refresh_access_token()
+    global connection
 
     connection = Connection(
         debug=False,config_file=None, domain='api.ebay.com', certid=EBAY_CREDENTIALS['client_secret'],
@@ -216,9 +310,11 @@ def main():
     )
 
     success_count = 0
-    inventory = supabase.table(table_name).select('*').order('publication_year', desc=True).execute().data
+    inventory = supabase.table(table_name).select('*').order('publication_year', desc=False).eq('listed', False).execute().data
 
     for item in inventory:
+                
+        ensure_token_valid()
         
         try:
             language = 'English' if item.get('language', 'en') == 'en' else item.get('language')
@@ -253,7 +349,7 @@ def main():
                     "ListingType": "FixedPriceItem",
                     "Quantity": str(stock_visible),
                     "Location": xml_safe("Port Glasgow"),
-                    "PostalCode": xml_safe("PA145YU"),
+                    "PostalCode": xml_safe("PA14 5YU"),
                     "ItemSpecifics": {
                         "NameValueList": [
                             {"Name": "Title", "Value": [safe_title]},
@@ -261,14 +357,28 @@ def main():
                             {"Name": "Binding", "Value": [binding_val]},
                             {"Name": "Language", "Value": [xml_safe(language)]},
                             {"Name": "ISBN", "Value": [isbn_val]},
-                            {"Name": "Publisher", "Value": [publisher_val]}
+                            {"Name": "Publisher", "Value": [publisher_val]},
+                            {"Name": "Topic", "Value": "Books"},
+                            {"Name": "Format", "Value": [binding_val]}
                         ]
                     },
                     "BusinessPolicies": {"PaymentPolicyID": EBAY_CREDENTIALS['business_policies']['payment']},
                     "ReturnPolicy": {"ReturnsAcceptedOption": "ReturnsAccepted", "RefundOption": "MoneyBack", "ReturnsWithinOption": "Days_30", "ShippingCostPaidByOption": "Buyer"},
-                    "ShippingDetails": {"ShippingServiceOptions": [{"ShippingServicePriority": "1", "ShippingService": "UK_RoyalMailSecondClassStandard", "ShippingServiceCost": "3.00", "FreeShipping": "false", "ShippingServiceAdditionalCost": "0.00"},{'ShippingServicePriority': '2', 'ShippingService': 'UK_RoyalMail24', 'ShippingServiceCost': '2.95', 'FreeShipping': 'false', 'ShippingServiceAdditionalCost': '2.95'}]},
                     
-                    # 'ShippingDetails': {'ShippingType': 'Flat', 'ShippingServiceOptions': [{'ShippingServicePriority': '1', 'ShippingService': 'UK_RoyalMailTracked48', 'ShippingServiceCost': '0.00', 'FreeShipping': 'true', 'ShippingServiceAdditionalCost': '0.00'}, {'ShippingServicePriority': '2', 'ShippingService': 'UK_RoyalMail24', 'ShippingServiceCost': '2.95', 'FreeShipping': 'false', 'ShippingServiceAdditionalCost': '2.95'}]},
+                    
+                    # 'ShippingDetails': {'ShippingServiceOptions':[{'ShippingServicePriority':1,'ShippingService':'UK_RoyalMailTracked48','FreeShipping':True,'ShippingServiceCost':{'value':'0.00','currencyID':'GBP'},'ShippingServiceAdditionalCost':{'value':'0.00','currencyID':'GBP'}},{'ShippingServicePriority':2,'ShippingService':'UK_RoyalMail24','FreeShipping':False,'ShippingServiceCost':{'value':'2.95','currencyID':'GBP'},'ShippingServiceAdditionalCost':{'value':'2.95','currencyID':'GBP'}}]},
+
+                    # "ShippingDetails":{"ShippingType":"Flat","ShippingServiceOptions":[{"ShippingServicePriority":1,"ShippingService":"UK_RoyalMailTracked","FreeShipping":"true","ShippingServiceCost":{"@currencyID":"GBP","__value__":"0.0"},"ShippingServiceAdditionalCost":{"@currencyID":"GBP","__value__":"2.95"}},{"ShippingServicePriority":2,"ShippingService":"UK_RoyalMail24","FreeShipping":"false","ShippingServiceCost":{"@currencyID":"GBP","__value__":"2.95"}, "ShippingServiceAdditionalCost":{"@currencyID":"GBP","__value__":"2.95"}}]},
+                    
+                    
+                    "ShippingDetails":{"ShippingType":"Flat","ShippingServiceOptions":[{"ShippingServicePriority":1,"ShippingService":"UK_RoyalMailTracked","FreeShipping":"true","ShippingServiceCost":"0.00","ShippingServiceAdditionalCost":"0.00"},{"ShippingServicePriority":2,"ShippingService":"UK_RoyalMailNextDay","FreeShipping":"false","ShippingServiceCost":"2.95", "ShippingServiceAdditionalCost":"2.95"}]},
+
+
+                    
+                    
+                    # "ShippingDetails": {"ShippingServiceOptions": [{"ShippingServicePriority": "1", "ShippingService": "UK_RoyalMailSecondClassStandard", "ShippingServiceCost": "3.00", "FreeShipping": "false", "ShippingServiceAdditionalCost": "0.00"},{'ShippingServicePriority': '2', 'ShippingService': 'UK_RoyalMail24', 'ShippingServiceCost': '2.95', 'FreeShipping': 'false', 'ShippingServiceAdditionalCost': '2.95'}]},
+                    
+                    # 'ShippingDetails': {'ShippingServiceOptions': [{'ShippingServicePriority': '1', 'ShippingService': 'UK_RoyalMailTracked48', 'ShippingServiceCost': '0.00', 'FreeShipping': 'true', 'ShippingServiceAdditionalCost': '0.00'}, {'ShippingServicePriority': '2', 'ShippingService': 'UK_RoyalMail24', 'ShippingServiceCost': '2.95', 'FreeShipping': 'false', 'ShippingServiceAdditionalCost': '2.95'}]},
                   
                     "ProductListingDetails": {"ISBN": isbn_val}
                 }
@@ -286,14 +396,30 @@ def main():
             payload["Item"]["StartPrice"] = f"{start_price:.2f}"
 
             response = connection.execute('AddFixedPriceItem', payload)
-            if response.dict().get('Ack') == 'Warning':
+            if response.dict().get('Ack') in ('Success','Warning'):
+                supabase.table(table_name).update({'listed': True}).eq('id', item['id']).execute()
                 print(f"Successfully listed: {safe_title} (ID: {response.dict()['ItemID']})")
                 success_count += 1
                 print("Total successful listings:", success_count)
+        except ConnectionError as e:
+            # if it’s a token-expired error, refresh+retry once
+            if 'Invalid token' in str(e) or 'token expired' in str(e).lower():
+                print("Access token expired mid-run, refreshing…")
+                refresh_access_token()
+                response = connection.execute('AddFixedPriceItem', payload)
+                if response.dict().get('Ack') in ('Success','Warning'):
+                    supabase.table(table_name).update({'listed': True})\
+                        .eq('id', item['id']).execute()
+                    print(f"✅ Listed after refresh: {item['id']}")
+            else:
+                # some other eBay error
+                print(f"eBay error for {item['id']}: {e}")
         except Exception as e:
-            print(f"{payload}\n\n")
-            print(f"Failed item {item.get('id')}: {e}")
+            print(f"Error processing {item['id']}: {e}")
 
 
 if __name__ == "__main__":
-    main()
+    if RUN_SCRIPT.lower() == "yes":
+        main()
+    else:
+        print("Script execution skipped because RUN_SCRIPT is not 'yes'.")

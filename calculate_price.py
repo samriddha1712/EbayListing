@@ -8,6 +8,7 @@ def inclusive_price(item):
     ebay_fpf = 9.9
     dropship_fee = 0.7
     pro_margin = 10
+    ebay_fixed_fee = 0.3
 
     cp = rrp - (rrp * (discount / 100))
 
@@ -22,6 +23,6 @@ def inclusive_price(item):
 
     ebay_fee = (base_cost * (ebay_fpf / 100)) + item_fee
 
-    final_price = (base_cost + ebay_fee) * (1 + pro_margin / 100)
+    final_price = ((base_cost + ebay_fee) * (1 + pro_margin / 100)) + ebay_fixed_fee
     
     return final_price
